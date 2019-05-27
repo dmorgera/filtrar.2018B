@@ -122,7 +122,6 @@ void recorrer_directorio(char* nombre_dir)
 		strcat(fich,nombre_dir);
 		strcat(fich,"/");
 		strcat(fich,ent->d_name);
-		printf(fich);
 
 		/* Nos saltamos las rutas que sean directorios. */
 		if(stat(fich,&fileStat) < 0){
