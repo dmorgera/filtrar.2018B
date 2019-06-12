@@ -21,12 +21,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <signal.h>
 #include <time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <dlfcn.h>
+#include <ctype.h>
+#include <signal.h>
 
 #include "filtrar.h"
+
+#define _GNU_SOURCE
 
 
 /* ---------------- PROTOTIPOS ----------------- */ 
@@ -54,8 +58,9 @@ void esperar_terminacion(void);
    de los filtros. */ 
 extern void preparar_alarma(void);
 
-/* Manejador de señales para el SIGPIPE de recorrer_directorio.*/
-void sighandler(int signum);
+/* Manejador de señales. */
+
+void sigalrmhandler(void);
 
 /* ---------------- IMPLEMENTACIONES ----------------- */ 
 char** filtros;   /* Lista de nombres de los filtros a aplicar */
@@ -71,7 +76,7 @@ int main(int argc, char* argv[])
 	if(argc<2) 
 	{
 		/* Invocacion sin argumentos  o con un numero de argumentos insuficiente */
-		printf("Uso correcto: %s <directorio> [filtro...]\n", argv[0]);
+		fprintf(stderr,"Uso: %s directorio [filtro...]\n", argv[0]);
 		exit(0);
 	}
 
@@ -79,9 +84,10 @@ int main(int argc, char* argv[])
 	n_filtros = argc-2;                               /* Numero de filtros a usar */
 	pids = (pid_t*)malloc(sizeof(pid_t)*n_filtros);   /* Lista de pids */
 
-//	preparar_alarma();
+	preparar_alarma();
 
-//	preparar_filtros();
+	if(n_filtros > 0)
+		preparar_filtros();
 
 	recorrer_directorio(argv[1]);
 
@@ -103,8 +109,8 @@ void recorrer_directorio(char* nombre_dir)
 	/* Abrir el directorio */
 	if ((dir = opendir(nombre_dir)) == NULL) {
 		/* Tratamiento del error. */
-		perror("opendir");
-		exit(0);
+		fprintf(stderr, "Error al abrir el directorio '%s'\n", nombre_dir);
+		exit(1);
 	}
 	/* Recorremos las entradas del directorio */
 	while((ent=readdir(dir))!=NULL)
@@ -115,8 +121,8 @@ void recorrer_directorio(char* nombre_dir)
 
 		/* fich debe contener la ruta completa al fichero */
 		if (getcwd(fich,1024) == NULL){
-			perror("getcwd");
-			exit(0);
+			fprintf(stderr, "Error al obtener la ruta al fichero");
+			exit(1);
 		}
 		strcat(fich,"/");
 		strcat(fich,nombre_dir);
@@ -125,8 +131,8 @@ void recorrer_directorio(char* nombre_dir)
 
 		/* Nos saltamos las rutas que sean directorios. */
 		if(stat(fich,&fileStat) < 0){
-			perror("stat");
-			exit(0);
+			fprintf(stderr, "AVISO: No se puede stat el fichero '%s'!\n", fich);
+			exit(1);
 		}
 		if(S_ISDIR(fileStat.st_mode))
 			continue;
@@ -134,29 +140,32 @@ void recorrer_directorio(char* nombre_dir)
 		/* Abrir el archivo. */
 		if((fd = open(fich, O_RDONLY)) < 0){
 			/* Tratamiento del error. */
-			perror("open");
-			exit(0);
+			fprintf(stderr, "Error al abrir el fichero '%s'\n", fich);
+			exit(1);
 		}
 
 		/* Cuidado con escribir en un pipe sin lectores! */
-		signal(SIGPIPE,sighandler);
-
+		 if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+            fprintf(stderr, "Error al emitir el fichero '%s'\n", fich);
+            close(fd);
+			break;
+		 }
 		/* Emitimos el contenido del archivo por la salida estandar. */
 		while(write(1,buff,read(fd,buff,4096)) > 0)
 			continue;
 
 		/* Cerrar. */
 		if(close(fd) < 0){
-			perror("close");
-			exit(0);
+			fprintf(stderr, "Error al cerrar el fichero '%s'\n", fich);
+			exit(1);
 		}
 	}
 	/* Cerrar. */
 	if(closedir(dir) < 0){
-		perror("closedir");
-		exit(0);
+		fprintf(stderr, "Error al cerrar el directorio");
+		exit(1);
 	}
-
+	close(1);
 	/* IMPORTANTE:
 	 * Para que los lectores del pipe puedan terminar
 	 * no deben quedar escritores al otro extremo. */
@@ -165,33 +174,44 @@ void recorrer_directorio(char* nombre_dir)
 }
 
 
-void preparar_filtros(void)
-{
-	int p;
-
-
-	{
+void preparar_filtros(void){
+	int fd[n_filtros][2];
+	char ch = '.';
+	char *ret;
+	for (int i = 0; i < n_filtros; i++) {
 		/* Tuberia hacia el hijo (que es el proceso que filtra). */
-
+		if(pipe(fd[i]) < 0){
+			fprintf(stderr, "Error al crear el pipe\n");
+			exit(1);
+		}
 		/* Lanzar nuevo proceso */
-		switch(p)
+		switch(pids[i] = fork())
 		{
 		case -1:
 			/* Error. Mostrar y terminar. */
-
+			fprintf(stderr, "Error al crear proceso %d\n", pids[i]);
+			exit(1);
 		case  0:
 			/* Hijo: Redireccion y Ejecuta el filtro. */
-
-		//	if ()	/* El nombre termina en ".so" ? */
-			{	/* SI. Montar biblioteca y utilizar filtro. */
-		//		filtrar_con_filtro(filtros[p]);
+			dup2(fd[i][0],0);
+			close(fd[i][0]);
+			close(fd[i][1]);
+			ret = strrchr(filtros[i], ch);
+			if (ret && !strcmp(ret, ".so")) {	/* El nombre termina en ".so" ? */
+				/* SI. Montar biblioteca y utilizar filtro. */
+				filtrar_con_filtro(filtros[i]);
+			} else {	
+				/* NO. Ejecutar como mandato estandar. */
+				execlp(filtros[i], filtros[i], NULL);
+				fprintf(stderr, "Error con el filtro");
+				exit(1);
 			}
-		//	else
-			{	/* NO. Ejecutar como mandato estandar. */
-			}
-		//
+			break;
 		default:
 			/* Padre: Redireccion */
+			dup2(fd[i][1],1);
+			close(fd[i][0]);
+			close(fd[i][1]);
 			break;
 		}
 	}
@@ -202,26 +222,87 @@ void imprimir_estado(char* filtro, int status)
 {
 	/* Imprimimos el nombre del filtro y su estado de terminacion */
 	if(WIFEXITED(status))
-		printf(stderr,"%s: %d\n",filtro,WEXITSTATUS(status));
+		fprintf(stderr,"%s: %d\n",filtro,WEXITSTATUS(status));
 	else
-		printf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
+		fprintf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
 }
 
 
 void esperar_terminacion(void)
 {
-    int p;
+    int p, status;
     
     for(p=0;p<n_filtros;p++)
     {
 	/* Espera al proceso pids[p] */
-
+		if(waitpid(0, &status, 0) < 0){
+			fprintf(stderr, "Error al esperar proceso %d\n", pids[p]);
+			exit(1);
+		}
 	/* Muestra su estado. */
-
+	imprimir_estado(filtros[p], status);
     }
 }
 
-void sighandler(int signum) {
-   fprintf(stderr,"Error al transmitir el fichero, nadie leyendo\n");
-   exit(0);
+void filtrar_con_filtro(char *nombre_filtro){
+	void *handle;
+	int (*tratar)(char*,char*,int);
+	char buf_in[1024], buf_out[1024];
+	char *error; 
+	int filtrados, leidos = 0;
+
+	handle = dlopen(nombre_filtro, RTLD_LAZY);
+	error = dlerror();
+	if(error != NULL){
+		fprintf(stderr,"Error al abrir la biblioteca '%s'\n", nombre_filtro);
+		exit(1);
+	}
+	tratar = dlsym(handle, "tratar");
+	error = dlerror();
+	if(error != NULL){
+		fprintf(stderr, "Error al buscar el simbolo '%s' en '%s'\n", "tratar", nombre_filtro);
+		exit(1);
+	}
+	while ((leidos = (int) read(0, buf_in, 1024)) > 0) {
+        if ((filtrados = tratar(buf_in, buf_out, leidos)) == 0 )
+             break;
+        write(1, buf_out, sizeof(char) * filtrados);
+	}
+	if(dlclose(handle) < 0){
+		fprintf(stderr, "Error al cerrar la biblioteca '%s'\n", nombre_filtro);
+		exit(1);
+	}
+	exit(0);
+}
+
+void preparar_alarma(void){
+	char* ent;
+	int tiempo;
+	char* ptr;
+	if((ent = getenv("FILTRAR_TIMEOUT")) != NULL){
+		if (!isdigit(ent[0])) {
+            fprintf(stderr, "Error FILTRAR_TIMEOUT no es entero positivo: '%s'\n", ent);
+			exit(1);
+		}
+		tiempo = strtol(ent, &ptr, 10);
+		signal(SIGALRM, sigalrmhandler);
+		alarm(tiempo);
+		fprintf(stderr, "AVISO: La alarma vencera tras %d segundos!\n", tiempo);
+	}
+}
+
+void sigalrmhandler(void){
+	fprintf(stderr,"AVISO: La alarma ha saltado!\n");
+	if (n_filtros > 0) {
+        for (int i = 0; i < n_filtros; i++) {
+            if (kill(pids[i], 0) == 0) {
+                if ((kill(pids[i], SIGKILL)) < 0 ) {
+                    fprintf(stderr, "Error al intentar matar proceso %d\n", pids[i]);
+                    exit(1);
+                }
+            }
+		}
+	}
+	esperar_terminacion();
+	exit(0);
 }

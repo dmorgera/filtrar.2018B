@@ -24,7 +24,7 @@ int tratar(char* buff_in, char* buff_out, int tam)
 {
 	int o = 0; 
 	for(int i = 0;i < tam;i++){
-		if(isalpha(buff_in[i])){
+		if(!isalpha(buff_in[i])){
 			buff_out[o]=buff_in[i];
 			o++;
 		}
