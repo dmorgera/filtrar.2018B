@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
 	{
 		/* Invocacion sin argumentos  o con un numero de argumentos insuficiente */
 		fprintf(stderr,"Uso: %s directorio [filtro...]\n", argv[0]);
-		exit(0);
+		exit(1);
 	}
 
 	filtros = &(argv[2]);                             /* Lista de filtros a aplicar */
@@ -178,7 +178,8 @@ void preparar_filtros(void){
 	int fd[n_filtros][2];
 	char ch = '.';
 	char *ret;
-	for (int i = 0; i < n_filtros; i++) {
+	int i;
+	for (i = 0; i < n_filtros; i++) {
 		/* Tuberia hacia el hijo (que es el proceso que filtra). */
 		if(pipe(fd[i]) < 0){
 			fprintf(stderr, "Error al crear el pipe\n");
@@ -224,7 +225,7 @@ void imprimir_estado(char* filtro, int status)
 	if(WIFEXITED(status))
 		fprintf(stderr,"%s: %d\n",filtro,WEXITSTATUS(status));
 	else
-		fprintf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
+		fprintf(stderr,"%s: senyal %d\n",filtro,WTERMSIG(status));
 }
 
 
@@ -292,9 +293,10 @@ void preparar_alarma(void){
 }
 
 void sigalrmhandler(void){
+	int i;
 	fprintf(stderr,"AVISO: La alarma ha saltado!\n");
 	if (n_filtros > 0) {
-        for (int i = 0; i < n_filtros; i++) {
+        for (i = 0; i < n_filtros; i++) {
             if (kill(pids[i], 0) == 0) {
                 if ((kill(pids[i], SIGKILL)) < 0 ) {
                     fprintf(stderr, "Error al intentar matar proceso %d\n", pids[i]);

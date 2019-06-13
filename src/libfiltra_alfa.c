@@ -22,8 +22,9 @@
 /* Devuelve el numero de caracteres que han pasado el filtro. */
 int tratar(char* buff_in, char* buff_out, int tam)
 {
+	int i;
 	int o = 0; 
-	for(int i = 0;i < tam;i++){
+	for(i = 0;i < tam;i++){
 		if(!isalpha(buff_in[i])){
 			buff_out[o]=buff_in[i];
 			o++;
